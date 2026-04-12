@@ -1,0 +1,5 @@
+{
+  "name": "Smart Ledger",
+  "description": "A simple, accounting-focused household account book with a clean, calculator-like design.",
+  "requestFramePermissions": []
+}
