@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Calculator, Plus, Trash2, TrendingDown, TrendingUp, Receipt, Search, Filter, Undo, Settings, X, Edit2, Check, GripVertical, BarChart2, RefreshCw,
-  Coffee, Home, Zap, Wifi, ShoppingCart, Car, Gift, HeartPulse, Wallet, Briefcase, HelpCircle, Smartphone, Monitor, BookOpen, Plane, Utensils, Music, Scissors, Dumbbell
+  Coffee, Home, Zap, Wifi, ShoppingCart, Car, Gift, HeartPulse, Wallet, Briefcase, HelpCircle, Smartphone, Monitor, BookOpen, Plane, Utensils, Music, Scissors, Dumbbell, Upload, FileText, Camera, Loader2
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { GoogleGenAI, Type } from "@google/genai";
 
 const ICON_MAP: Record<string, React.ElementType> = {
   Coffee, Home, Zap, Wifi, ShoppingCart, Car, Gift, HeartPulse, Wallet, Briefcase, HelpCircle, Smartphone, Monitor, BookOpen, Plane, Utensils, Music, Scissors, Dumbbell
@@ -102,8 +103,16 @@ export default function App() {
     }
   }, [txType, categories, category]);
 
+  // Receipt Scanning State
+  const [isAnalyzingReceipt, setIsAnalyzingReceipt] = useState(false);
+
   // Category Modal States
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
+  const [csvRawData, setCsvRawData] = useState<string[][]>([]);
+  const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
+  const [csvMapping, setCsvMapping] = useState({ date: -1, amount: -1, memo: -1 });
+  const [csvPreview, setCsvPreview] = useState<any[]>([]);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [newCategoryType, setNewCategoryType] = useState<CategoryType>('expense');
   const [newCategoryIcon, setNewCategoryIcon] = useState<string>('HelpCircle');
@@ -245,6 +254,270 @@ export default function App() {
 
   const handleDragEnd = () => {
     setDraggedCategoryIndex(null);
+  };
+
+  const handleReceiptUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsAnalyzingReceipt(true);
+    try {
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        try {
+          const base64Data = (event.target?.result as string).split(',')[1];
+          
+          const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+          const response = await ai.models.generateContent({
+            model: "gemini-3-flash-preview",
+            contents: {
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: file.type,
+                    data: base64Data,
+                  },
+                },
+                {
+                  text: "Analyze this receipt and extract the following information. Return ONLY a JSON object.",
+                },
+              ],
+            },
+            config: {
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  date: {
+                    type: Type.STRING,
+                    description: "The date of the receipt in YYYY-MM-DD format. If not found, return empty string.",
+                  },
+                  storeName: {
+                    type: Type.STRING,
+                    description: "The name of the store or merchant. If not found, return empty string.",
+                  },
+                  totalAmount: {
+                    type: Type.NUMBER,
+                    description: "The total amount paid. Return as a number. If not found, return 0.",
+                  },
+                  category: {
+                    type: Type.STRING,
+                    description: "The category of the purchase (e.g., 食費, 日用品, 交通費, 衣服, 医療費, 交際費, 美容, 趣味, その他). Choose the most appropriate one.",
+                  }
+                },
+                required: ["date", "storeName", "totalAmount", "category"]
+              }
+            }
+          });
+
+          const resultText = response.text;
+          if (resultText) {
+            const parsed = JSON.parse(resultText);
+            
+            if (parsed.date) {
+              const d = new Date(parsed.date);
+              if (!isNaN(d.getTime())) {
+                setDate(d.toISOString().split('T')[0]);
+              }
+            }
+            if (parsed.totalAmount) {
+              setAmount(parsed.totalAmount.toString());
+            }
+            if (parsed.storeName) {
+              setMemo(parsed.storeName);
+            }
+            if (parsed.category) {
+              // Try to find a matching category
+              const matchedCategory = categories.find(c => c.type === 'expense' && (c.name.includes(parsed.category) || parsed.category.includes(c.name)));
+              if (matchedCategory) {
+                setCategory(matchedCategory.name);
+              }
+            }
+            setTxType('expense'); // Receipts are usually expenses
+          }
+        } catch (error) {
+          console.error("Error analyzing receipt:", error);
+          alert("レシートの解析に失敗しました。");
+        } finally {
+          setIsAnalyzingReceipt(false);
+        }
+      };
+      reader.readAsDataURL(file);
+    } catch (error) {
+      console.error("Error reading file:", error);
+      setIsAnalyzingReceipt(false);
+    }
+  };
+
+  const parseCSV = (text: string): string[][] => {
+    const result: string[][] = [];
+    let row: string[] = [];
+    let inQuotes = false;
+    let currentVal = '';
+    
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      if (inQuotes) {
+        if (char === '"') {
+          if (i + 1 < text.length && text[i + 1] === '"') {
+            currentVal += '"';
+            i++;
+          } else {
+            inQuotes = false;
+          }
+        } else {
+          currentVal += char;
+        }
+      } else {
+        if (char === '"') {
+          inQuotes = true;
+        } else if (char === ',') {
+          row.push(currentVal);
+          currentVal = '';
+        } else if (char === '\n' || char === '\r') {
+          row.push(currentVal);
+          if (row.some(v => v.trim() !== '')) {
+            result.push(row);
+          }
+          row = [];
+          currentVal = '';
+          if (char === '\r' && i + 1 < text.length && text[i + 1] === '\n') {
+            i++;
+          }
+        } else {
+          currentVal += char;
+        }
+      }
+    }
+    if (currentVal || row.length > 0) {
+      row.push(currentVal);
+      if (row.some(v => v.trim() !== '')) {
+        result.push(row);
+      }
+    }
+    return result;
+  };
+
+  const generatePreview = (dataRows: string[][], mapping: { date: number, amount: number, memo: number }) => {
+    const preview = dataRows.map((row, index) => {
+      let rawDate = row[mapping.date] || '';
+      let formattedDate = rawDate;
+      const dateMatch = rawDate.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+      if (dateMatch) {
+        formattedDate = `${dateMatch[1]}-${dateMatch[2].padStart(2, '0')}-${dateMatch[3].padStart(2, '0')}`;
+      } else if (!isNaN(Date.parse(rawDate))) {
+        const d = new Date(rawDate);
+        if (!isNaN(d.getTime())) {
+          formattedDate = d.toISOString().split('T')[0];
+        }
+      }
+
+      let rawAmount = row[mapping.amount] || '0';
+      let amountNum = Number(rawAmount.replace(/,/g, ''));
+      if (isNaN(amountNum)) amountNum = 0;
+
+      const type: CategoryType = amountNum < 0 ? 'expense' : 'expense';
+      const absAmount = Math.abs(amountNum);
+
+      return {
+        id: `csv-${index}`,
+        selected: true,
+        date: formattedDate,
+        amount: absAmount,
+        memo: row[mapping.memo] || '',
+        type: type,
+        category: categories.find(c => c.type === type)?.name || '',
+      };
+    });
+    setCsvPreview(preview);
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      const parsed = parseCSV(text);
+      if (parsed.length > 0) {
+        const headers = parsed[0];
+        const dataRows = parsed.slice(1);
+        setCsvHeaders(headers);
+        setCsvRawData(dataRows);
+
+        let dateIdx = -1;
+        let amountIdx = -1;
+        let memoIdx = -1;
+
+        headers.forEach((header, idx) => {
+          const h = header.toLowerCase();
+          if (h.includes('日') || h.includes('date')) dateIdx = idx;
+          else if (h.includes('金') || h.includes('amount') || h.includes('円')) amountIdx = idx;
+          else if (h.includes('内容') || h.includes('摘要') || h.includes('memo') || h.includes('店') || h.includes('名')) memoIdx = idx;
+        });
+
+        const firstRow = dataRows[0];
+        if (dateIdx === -1 && firstRow) {
+          dateIdx = firstRow.findIndex(val => !isNaN(Date.parse(val)) || /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(val));
+        }
+        if (amountIdx === -1 && firstRow) {
+          amountIdx = firstRow.findIndex((val, idx) => idx !== dateIdx && !isNaN(Number(val.replace(/,/g, ''))));
+        }
+        if (memoIdx === -1 && firstRow) {
+          memoIdx = firstRow.findIndex((val, idx) => idx !== dateIdx && idx !== amountIdx && isNaN(Number(val)));
+        }
+
+        const mapping = {
+          date: dateIdx !== -1 ? dateIdx : 0,
+          amount: amountIdx !== -1 ? amountIdx : 1,
+          memo: memoIdx !== -1 ? memoIdx : 2,
+        };
+        setCsvMapping(mapping);
+        generatePreview(dataRows, mapping);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleMappingChange = (field: 'date' | 'amount' | 'memo', value: number) => {
+    const newMapping = { ...csvMapping, [field]: value };
+    setCsvMapping(newMapping);
+    generatePreview(csvRawData, newMapping);
+  };
+
+  const handlePreviewChange = (id: string, field: string, value: any) => {
+    setCsvPreview(prev => prev.map(item => {
+      if (item.id === id) {
+        const updated = { ...item, [field]: value };
+        if (field === 'type') {
+          updated.category = categories.find(c => c.type === value)?.name || '';
+        }
+        return updated;
+      }
+      return item;
+    }));
+  };
+
+  const importCsvTransactions = () => {
+    const newTransactions = csvPreview
+      .filter(item => item.selected)
+      .map(item => ({
+        id: crypto.randomUUID(),
+        date: item.date,
+        amount: item.amount,
+        category: item.category,
+        memo: item.memo,
+        type: item.type,
+      }));
+    
+    if (newTransactions.length > 0) {
+      setPreviousTransactions(transactions);
+      setTransactions(prev => [...prev, ...newTransactions].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+    }
+    setIsCsvModalOpen(false);
+    setCsvRawData([]);
+    setCsvPreview([]);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -397,13 +670,26 @@ export default function App() {
               <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center">
                 <Plus size={14} className="mr-1" /> Entry Form
               </h2>
-              <button 
-                type="button" 
-                onClick={() => setIsCategoryModalOpen(true)}
-                className="text-gray-400 hover:text-[#141414] transition-colors flex items-center gap-1 bg-gray-50 hover:bg-gray-100 px-2 py-1 rounded-md"
-              >
-                <Settings size={12} /> <span className="text-[10px] font-bold">科目設定</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <label className="cursor-pointer text-gray-400 hover:text-[#141414] transition-colors flex items-center gap-1 bg-gray-50 hover:bg-gray-100 px-2 py-1 rounded-md">
+                  <Camera size={12} /> <span className="text-[10px] font-bold">レシート読込</span>
+                  <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleReceiptUpload} />
+                </label>
+                <button 
+                  type="button" 
+                  onClick={() => setIsCsvModalOpen(true)}
+                  className="text-gray-400 hover:text-[#141414] transition-colors flex items-center gap-1 bg-gray-50 hover:bg-gray-100 px-2 py-1 rounded-md"
+                >
+                  <Upload size={12} /> <span className="text-[10px] font-bold">CSV読込</span>
+                </button>
+                <button 
+                  type="button" 
+                  onClick={() => setIsCategoryModalOpen(true)}
+                  className="text-gray-400 hover:text-[#141414] transition-colors flex items-center gap-1 bg-gray-50 hover:bg-gray-100 px-2 py-1 rounded-md"
+                >
+                  <Settings size={12} /> <span className="text-[10px] font-bold">科目設定</span>
+                </button>
+              </div>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-5">
@@ -940,6 +1226,206 @@ export default function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* CSV Import Modal */}
+      {isCsvModalOpen && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="px-4 sm:px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+              <div className="flex items-center gap-2">
+                <Upload size={18} className="text-gray-500" />
+                <h3 className="font-bold text-[#141414] tracking-wide">CSVインポート</h3>
+              </div>
+              <button 
+                onClick={() => {
+                  setIsCsvModalOpen(false);
+                  setCsvRawData([]);
+                  setCsvPreview([]);
+                }} 
+                className="text-gray-400 hover:text-[#141414] hover:bg-gray-100 p-1.5 rounded-lg transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-4 sm:p-6 overflow-y-auto flex-1 flex flex-col gap-6">
+              {csvRawData.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 border-2 border-dashed border-gray-200 rounded-xl bg-gray-50">
+                  <FileText size={48} className="text-gray-300 mb-4" />
+                  <p className="text-sm font-bold text-gray-600 mb-2">CSVファイルを選択してください</p>
+                  <p className="text-xs text-gray-400 mb-6">日付、金額、内容が含まれるファイル</p>
+                  <label className="cursor-pointer bg-[#141414] text-white px-6 py-3 rounded-xl font-bold text-sm hover:bg-black transition-all active:scale-95 shadow-md">
+                    ファイルを選択
+                    <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
+                  </label>
+                </div>
+              ) : (
+                <>
+                  <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
+                    <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">列の割り当て (Column Mapping)</h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-gray-600 mb-1">日付 (Date)</label>
+                        <select 
+                          value={csvMapping.date} 
+                          onChange={e => handleMappingChange('date', Number(e.target.value))}
+                          className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#141414]"
+                        >
+                          <option value="-1">選択しない</option>
+                          {csvHeaders.map((h, i) => <option key={i} value={i}>{h || `列 ${i+1}`}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-gray-600 mb-1">金額 (Amount)</label>
+                        <select 
+                          value={csvMapping.amount} 
+                          onChange={e => handleMappingChange('amount', Number(e.target.value))}
+                          className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#141414]"
+                        >
+                          <option value="-1">選択しない</option>
+                          {csvHeaders.map((h, i) => <option key={i} value={i}>{h || `列 ${i+1}`}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-gray-600 mb-1">内容 (Memo)</label>
+                        <select 
+                          value={csvMapping.memo} 
+                          onChange={e => handleMappingChange('memo', Number(e.target.value))}
+                          className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#141414]"
+                        >
+                          <option value="-1">選択しない</option>
+                          {csvHeaders.map((h, i) => <option key={i} value={i}>{h || `列 ${i+1}`}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">プレビュー (Preview)</h4>
+                    <div className="border border-gray-200 rounded-xl overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse min-w-[600px]">
+                          <thead className="bg-gray-50 border-b border-gray-200">
+                            <tr>
+                              <th className="px-4 py-3 text-[10px] font-bold text-gray-400 uppercase tracking-widest w-[40px]">対象</th>
+                              <th className="px-4 py-3 text-[10px] font-bold text-gray-400 uppercase tracking-widest w-[120px]">日付</th>
+                              <th className="px-4 py-3 text-[10px] font-bold text-gray-400 uppercase tracking-widest w-[100px]">収支</th>
+                              <th className="px-4 py-3 text-[10px] font-bold text-gray-400 uppercase tracking-widest w-[140px]">科目</th>
+                              <th className="px-4 py-3 text-[10px] font-bold text-gray-400 uppercase tracking-widest">内容</th>
+                              <th className="px-4 py-3 text-[10px] font-bold text-gray-400 uppercase tracking-widest text-right w-[120px]">金額</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {csvPreview.map((item) => (
+                              <tr key={item.id} className={`hover:bg-gray-50 transition-colors ${!item.selected ? 'opacity-50' : ''}`}>
+                                <td className="px-4 py-2 text-center">
+                                  <input 
+                                    type="checkbox" 
+                                    checked={item.selected} 
+                                    onChange={e => handlePreviewChange(item.id, 'selected', e.target.checked)}
+                                    className="rounded text-[#141414] focus:ring-[#141414]"
+                                  />
+                                </td>
+                                <td className="px-4 py-2">
+                                  <input 
+                                    type="date" 
+                                    value={item.date} 
+                                    onChange={e => handlePreviewChange(item.id, 'date', e.target.value)}
+                                    className="w-full px-2 py-1 bg-transparent border border-transparent hover:border-gray-300 focus:border-[#141414] focus:bg-white rounded text-xs font-mono transition-all"
+                                  />
+                                </td>
+                                <td className="px-4 py-2">
+                                  <select 
+                                    value={item.type} 
+                                    onChange={e => handlePreviewChange(item.id, 'type', e.target.value)}
+                                    className="w-full px-2 py-1 bg-transparent border border-transparent hover:border-gray-300 focus:border-[#141414] focus:bg-white rounded text-xs font-bold transition-all"
+                                  >
+                                    <option value="expense">支出</option>
+                                    <option value="income">収入</option>
+                                  </select>
+                                </td>
+                                <td className="px-4 py-2">
+                                  <select 
+                                    value={item.category} 
+                                    onChange={e => handlePreviewChange(item.id, 'category', e.target.value)}
+                                    className="w-full px-2 py-1 bg-transparent border border-transparent hover:border-gray-300 focus:border-[#141414] focus:bg-white rounded text-xs font-bold transition-all"
+                                  >
+                                    <option value="">未分類</option>
+                                    {categories.filter(c => c.type === item.type).map(c => (
+                                      <option key={c.name} value={c.name}>{c.name}</option>
+                                    ))}
+                                  </select>
+                                </td>
+                                <td className="px-4 py-2">
+                                  <input 
+                                    type="text" 
+                                    value={item.memo} 
+                                    onChange={e => handlePreviewChange(item.id, 'memo', e.target.value)}
+                                    className="w-full px-2 py-1 bg-transparent border border-transparent hover:border-gray-300 focus:border-[#141414] focus:bg-white rounded text-xs transition-all"
+                                    placeholder="内容"
+                                  />
+                                </td>
+                                <td className="px-4 py-2">
+                                  <input 
+                                    type="number" 
+                                    value={item.amount} 
+                                    onChange={e => handlePreviewChange(item.id, 'amount', Number(e.target.value))}
+                                    className="w-full px-2 py-1 bg-transparent border border-transparent hover:border-gray-300 focus:border-[#141414] focus:bg-white rounded text-xs font-mono text-right transition-all"
+                                  />
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+            
+            {csvRawData.length > 0 && (
+              <div className="px-4 sm:px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-between items-center">
+                <div className="text-xs text-gray-500 font-bold">
+                  {csvPreview.filter(i => i.selected).length} 件を取り込みます
+                </div>
+                <div className="flex gap-3">
+                  <button 
+                    onClick={() => {
+                      setCsvRawData([]);
+                      setCsvPreview([]);
+                    }} 
+                    className="px-4 py-2 bg-white border border-gray-200 text-gray-600 rounded-lg text-sm font-bold hover:bg-gray-50 transition-all active:scale-95"
+                  >
+                    キャンセル
+                  </button>
+                  <button 
+                    onClick={importCsvTransactions}
+                    disabled={csvPreview.filter(i => i.selected).length === 0}
+                    className="px-6 py-2 bg-[#141414] text-white rounded-lg text-sm font-bold hover:bg-black disabled:opacity-50 transition-all active:scale-95 shadow-md"
+                  >
+                    保存する
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {/* Receipt Analysis Loading Overlay */}
+      {isAnalyzingReceipt && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex flex-col items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white p-8 rounded-3xl shadow-2xl flex flex-col items-center max-w-sm w-full text-center">
+            <div className="relative mb-6">
+              <div className="absolute inset-0 bg-blue-100 rounded-full animate-ping opacity-75"></div>
+              <div className="relative bg-[#141414] text-white p-4 rounded-full">
+                <Loader2 size={32} className="animate-spin" />
+              </div>
+            </div>
+            <h3 className="text-lg font-bold text-[#141414] mb-2">レシートを解析中...</h3>
+            <p className="text-sm text-gray-500">AIが日付、金額、内容を読み取っています。<br/>しばらくお待ちください。</p>
           </div>
         </div>
       )}
