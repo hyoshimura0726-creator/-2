@@ -1,0 +1,16 @@
+{
+  "name": "家計簿アプリ",
+  "short_name": "家計簿",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#141414",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "192x192 512x512 any",
+      "purpose": "any"
+    }
+  ]
+}
