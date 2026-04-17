@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="16" stdDeviation="24" flood-color="#000" flood-opacity="0.15" />
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000" flood-opacity="0.08" />
+    </filter>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#F1F5F9" />
+    </linearGradient>
+    <linearGradient id="black1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3F3F46" />
+      <stop offset="100%" stop-color="#18181B" />
+    </linearGradient>
+    <linearGradient id="black2" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#27272A" />
+      <stop offset="100%" stop-color="#09090B" />
+    </linearGradient>
+    <linearGradient id="gold-topleft" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FEF08A" />
+      <stop offset="100%" stop-color="#EAB308" />
+    </linearGradient>
+    <linearGradient id="gold-topright" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FDE047" />
+      <stop offset="100%" stop-color="#CA8A04" />
+    </linearGradient>
+    <linearGradient id="gold-bottomleft" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#CA8A04" />
+      <stop offset="100%" stop-color="#854D0E" />
+    </linearGradient>
+    <linearGradient id="gold-bottomright" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#A16207" />
+      <stop offset="100%" stop-color="#713F12" />
+    </linearGradient>
+  </defs>
+
+  <!-- App Icon Background (Squircle-like) -->
+  <rect width="512" height="512" rx="112" fill="url(#bg)" />
+
+  <g filter="url(#shadow)">
+    <!-- Vertical Stem -->
+    <rect x="220" y="240" width="72" height="170" fill="url(#black1)" />
+    <polygon points="256,240 292,240 292,410 256,410" fill="url(#black2)" />
+
+    <!-- Top Horizontal Bar -->
+    <rect x="150" y="240" width="212" height="40" fill="url(#black2)" />
+    <polygon points="256,240 362,240 362,280 256,280" fill="url(#black1)" />
+
+    <!-- Bottom Horizontal Bar -->
+    <rect x="150" y="300" width="212" height="40" fill="url(#black1)" />
+    <polygon points="256,300 362,300 362,340 256,340" fill="url(#black2)" />
+
+    <!-- Left Arm -->
+    <polygon points="126,100 200,100 256,200 256,240" fill="url(#black1)" />
+    <polygon points="163,100 200,100 256,200 256,150" fill="url(#black2)" opacity="0.6" />
+
+    <!-- Right Arm -->
+    <polygon points="312,100 386,100 256,240 256,200" fill="url(#black2)" />
+    <polygon points="312,100 349,100 256,150 256,200" fill="url(#black1)" opacity="0.6" />
+
+    <!-- Gold Diamond (Center) -->
+    <g transform="translate(256, 240)">
+      <!-- Top Left -->
+      <polygon points="0,-48 -48,0 0,0" fill="url(#gold-topleft)" />
+      <!-- Top Right -->
+      <polygon points="0,-48 48,0 0,0" fill="url(#gold-topright)" />
+      <!-- Bottom Left -->
+      <polygon points="-48,0 0,48 0,0" fill="url(#gold-bottomleft)" />
+      <!-- Bottom Right -->
+      <polygon points="48,0 0,48 0,0" fill="url(#gold-bottomright)" />
+    </g>
+  </g>
+</svg>
