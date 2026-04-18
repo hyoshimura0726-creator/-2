@@ -1,13 +1,15 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Calculator, Plus, Trash2, TrendingDown, TrendingUp, Receipt, Search, Filter, Undo, Settings, X, Edit2, Check, GripVertical, BarChart2, RefreshCw,
-  Coffee, Home, Zap, Wifi, ShoppingCart, Car, Gift, HeartPulse, Wallet, Briefcase, HelpCircle, Smartphone, Monitor, BookOpen, Plane, Utensils, Music, Scissors, Dumbbell, Upload, FileText, Camera, Loader2
+  Coffee, Home, Zap, Wifi, ShoppingCart, Car, Gift, HeartPulse, Wallet, Briefcase, HelpCircle, Smartphone, Monitor, BookOpen, Plane, Utensils, Music, Scissors, Dumbbell, Upload, FileText, Camera, Loader2, Mic, MicOff,
+  Baby, Dog, Cat, Gamepad2, Tv, Sofa, Ticket, Clapperboard, Trophy, Pizza, GlassWater, GraduationCap, Pill, Stethoscope, Wrench, Umbrella, Smile, Star, Heart, Bus, Train, Bike, Palmtree, Tent, Shirt, Sparkles, Droplet, Flame, Key, Bath
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { GoogleGenAI, Type } from "@google/genai";
 
 const ICON_MAP: Record<string, React.ElementType> = {
-  Coffee, Home, Zap, Wifi, ShoppingCart, Car, Gift, HeartPulse, Wallet, Briefcase, HelpCircle, Smartphone, Monitor, BookOpen, Plane, Utensils, Music, Scissors, Dumbbell
+  Coffee, Home, Zap, Wifi, ShoppingCart, Car, Gift, HeartPulse, Wallet, Briefcase, HelpCircle, Smartphone, Monitor, BookOpen, Plane, Utensils, Music, Scissors, Dumbbell,
+  Baby, Dog, Cat, Gamepad2, Tv, Sofa, Ticket, Clapperboard, Trophy, Pizza, GlassWater, GraduationCap, Pill, Stethoscope, Wrench, Umbrella, Smile, Star, Heart, Bus, Train, Bike, Palmtree, Tent, Shirt, Sparkles, Droplet, Flame, Key, Bath
 };
 
 type CategoryType = 'expense' | 'income';
@@ -105,6 +107,10 @@ export default function App() {
 
   // Receipt Scanning State
   const [isAnalyzingReceipt, setIsAnalyzingReceipt] = useState(false);
+  
+  // Speech Recognition State
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
 
   // Category Modal States
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
@@ -118,6 +124,9 @@ export default function App() {
   const [newCategoryIcon, setNewCategoryIcon] = useState<string>('HelpCircle');
   const [editingCategory, setEditingCategory] = useState<{old: string, new: string, type: CategoryType, icon: string} | null>(null);
 
+  const [showNewIconPicker, setShowNewIconPicker] = useState(false);
+  const [showEditIconPicker, setShowEditIconPicker] = useState(false);
+
   // Edit Transaction State
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
 
@@ -129,6 +138,26 @@ export default function App() {
 
   // Undo state
   const [previousTransactions, setPreviousTransactions] = useState<Transaction[] | null>(null);
+
+  // Budget State
+  const [monthlyBudget, setMonthlyBudget] = useState<number>(() => {
+    const saved = localStorage.getItem('smart-ledger-budget');
+    return saved ? Number(saved) : 0;
+  });
+  const [isEditingBudget, setIsEditingBudget] = useState(false);
+  const [tempBudget, setTempBudget] = useState('');
+
+  useEffect(() => {
+    localStorage.setItem('smart-ledger-budget', monthlyBudget.toString());
+  }, [monthlyBudget]);
+
+  const saveBudget = () => {
+    const parsed = Number(tempBudget);
+    if (!isNaN(parsed) && parsed >= 0) {
+      setMonthlyBudget(parsed);
+    }
+    setIsEditingBudget(false);
+  };
 
   useEffect(() => {
     localStorage.setItem('smart-ledger-data', JSON.stringify(transactions));
@@ -292,9 +321,9 @@ export default function App() {
                     type: Type.STRING,
                     description: "The date of the receipt in YYYY-MM-DD format. If not found, return empty string.",
                   },
-                  storeName: {
+                  mainPurchasedItems: {
                     type: Type.STRING,
-                    description: "The name of the store or merchant. If not found, return empty string.",
+                    description: "A short summary of the main items purchased (e.g., 'コーヒーとサンドイッチ', '日用品一式', '切符'). If unable to read items, return the store name instead.",
                   },
                   totalAmount: {
                     type: Type.NUMBER,
@@ -302,10 +331,10 @@ export default function App() {
                   },
                   category: {
                     type: Type.STRING,
-                    description: "The category of the purchase (e.g., 食費, 日用品, 交通費, 衣服, 医療費, 交際費, 美容, 趣味, その他). Choose the most appropriate one.",
+                    description: "The category of the purchase.",
                   }
                 },
-                required: ["date", "storeName", "totalAmount", "category"]
+                required: ["date", "mainPurchasedItems", "totalAmount", "category"]
               }
             }
           });
@@ -323,11 +352,12 @@ export default function App() {
             if (parsed.totalAmount) {
               setAmount(parsed.totalAmount.toString());
             }
-            if (parsed.storeName) {
-              setMemo(parsed.storeName);
+            if (parsed.mainPurchasedItems) {
+              setMemo(parsed.mainPurchasedItems);
+              autoSelectCategory(parsed.mainPurchasedItems);
             }
-            if (parsed.category) {
-              // Try to find a matching category
+            if (!category && parsed.category) {
+              // Try to find a matching category only if autoSelectCategory didn't already pick one
               const matchedCategory = categories.find(c => c.type === 'expense' && (c.name.includes(parsed.category) || parsed.category.includes(c.name)));
               if (matchedCategory) {
                 setCategory(matchedCategory.name);
@@ -347,6 +377,103 @@ export default function App() {
       console.error("Error reading file:", error);
       setIsAnalyzingReceipt(false);
     }
+  };
+
+  const autoSelectCategory = (text: string) => {
+    if (!text) return;
+
+    // 1. 判定用キーワード辞書（優先順位：上から順）
+    const KEYWORD_DICT = [
+      { name: '自己投資', aliases: ['教材', '教育'], keywords: ['参考書', '本', '文房具', '受験料', '模試', '書籍', '勉強', '資格'] },
+      { name: '固定費', aliases: ['家賃', '光熱費', '通信費'], keywords: ['家賃', '電気', '水道', 'ガス', '光熱費', 'ネット', 'スマホ', 'すまほ', '携帯', 'サブスク', 'アマプラ', '保険'] },
+      { name: '医療・健康', aliases: ['医療費', '健康'], keywords: ['病院', '歯医者', 'サプリ', 'プロテイン', 'ジム', 'マッサージ', '薬局'] },
+      { name: '美容・衣服', aliases: ['美容', '衣服', '被服費'], keywords: ['美容院', 'カット', '服', 'ユニクロ', 'コスメ', '散髪'] },
+      { name: '交際・娯楽', aliases: ['交際費', '娯楽', '趣味'], keywords: ['飲み会', '映画', 'プレゼント', 'カラオケ', '旅行', '趣味', 'ゲーセン', '遊び'] },
+      { name: '交通費', aliases: ['交通', '旅費'], keywords: ['電車', 'バス', 'タクシー', 'ガソリン', '駐車場', '切符', 'Suica', 'SUICA', 'suica', 'ICOCA', 'icoca', 'スイカ', 'イコカ'] },
+      { name: '日用品', aliases: ['生活用品', '雑貨'], keywords: ['洗剤', 'ティッシュ', '薬', 'ドラッグストア', 'シャンプー', 'ゴミ袋', '100均', '１００均', '百均', 'ひゃっきん'] },
+      { name: '食費', aliases: ['飲食'], keywords: ['ランチ', 'カフェ', 'スーパー', 'コンビニ', 'ご飯', '外食', '弁当', 'スタバ', 'マクド', 'マック', '自炊'] },
+    ];
+
+    const lowerText = text.toLowerCase();
+
+    for (const group of KEYWORD_DICT) {
+      if (group.keywords.some(kw => lowerText.includes(kw.toLowerCase()))) {
+        // キーワードに合致した場合、既存のカテゴリから最適なものを探す
+        const searchNames = [group.name, ...(group.aliases || [])];
+        const catExists = categories.find(c => 
+          c.type === 'expense' && 
+          searchNames.some(searchName => c.name.includes(searchName) || searchName.includes(c.name))
+        );
+
+        if (catExists) {
+          setCategory(catExists.name);
+          setTxType('expense');
+          return;
+        } else {
+          // もし完全な一致項目がなくても「未分類」を設定して終了することもできるが、
+          // 利便性のために存在するカテゴリの先頭をセットするか、そのまま（何もしない）にする。
+          // リクエスト通り「変更しない」なら `return;` を実行。
+          return; 
+        }
+      }
+    }
+  };
+
+  const toggleSpeechInput = () => {
+    if (isListening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert('お使いのブラウザは音声入力に対応していません。Chrome、Safari、Edgeなどの最新版をご利用ください。');
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognitionRef.current = recognition;
+    recognition.lang = 'ja-JP';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => {
+      setIsListening(true);
+    };
+
+    recognition.onresult = (event: any) => {
+      const transcript = event.results[0][0].transcript;
+      console.log('Speech result:', transcript);
+      
+      // Convert Amount
+      let parsedAmount = '';
+      const amountMatch = transcript.match(/([0-9０-９,，]+)\s*円/);
+      let parsedMemo = transcript;
+
+      if (amountMatch) {
+        // Convert full-width to half-width and remove commas
+        const numStr = amountMatch[1].replace(/[０-９]/g, (s: string) => String.fromCharCode(s.charCodeAt(0) - 0xFEE0)).replace(/[,，]/g, '');
+        parsedAmount = numStr;
+        setAmount(numStr);
+        // Remove the amount text from memo
+        parsedMemo = parsedMemo.replace(amountMatch[0], '').trim();
+      }
+
+      setMemo(parsedMemo);
+      // Auto-categorize based on memo content
+      autoSelectCategory(parsedMemo);
+    };
+
+    recognition.onerror = (event: any) => {
+      console.error('Speech recognition error', event.error);
+      setIsListening(false);
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+
+    recognition.start();
   };
 
   const parseCSV = (text: string): string[][] => {
@@ -610,6 +737,8 @@ export default function App() {
     return { income, expense };
   }, [transactions, currentMonth]);
 
+  const budgetPercent = monthlyBudget > 0 ? (monthlyStats.expense / monthlyBudget) * 100 : 0;
+
   const formatCurrency = (num: number) => {
     return new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' }).format(num);
   };
@@ -648,18 +777,63 @@ export default function App() {
                 </div>
               </div>
             </div>
-            <div className="bg-[#141414] text-[#E4E3E0] rounded-2xl p-4 sm:p-5 shadow-xl relative overflow-hidden">
+            <div className="bg-[#141414] text-[#E4E3E0] rounded-2xl p-4 sm:p-5 shadow-xl relative overflow-hidden flex flex-col justify-between">
               <div className="absolute -right-4 -top-4 p-4 opacity-5">
                 <TrendingDown size={100} />
               </div>
-              <div className="relative z-10">
-                <p className="text-[10px] font-mono opacity-70 mb-1 uppercase tracking-widest flex items-center">
-                  <span className="w-1.5 h-1.5 rounded-full bg-red-500 mr-2 animate-pulse"></span>
-                  合計支出
-                </p>
-                <div className="font-mono text-2xl sm:text-3xl font-light tracking-tight break-all">
-                  {formatCurrency(monthlyStats.expense)}
+              <div className="relative z-10 flex-1 flex flex-col justify-between">
+                <div>
+                  <div className="flex justify-between items-start mb-1">
+                    <p className="text-[10px] font-mono opacity-70 uppercase tracking-widest flex items-center">
+                      <span className="w-1.5 h-1.5 rounded-full bg-red-500 mr-2 animate-pulse"></span>
+                      合計支出
+                    </p>
+                    {isEditingBudget ? (
+                      <div className="flex items-center gap-1 z-20 relative">
+                        <input 
+                          type="number" 
+                          value={tempBudget} 
+                          onChange={(e) => setTempBudget(e.target.value)}
+                          className="bg-gray-800 text-xs text-white px-2 py-0.5 rounded w-20 outline-none focus:ring-1 focus:ring-white border border-gray-700 font-mono"
+                          autoFocus
+                          placeholder="予算"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') saveBudget();
+                            if (e.key === 'Escape') setIsEditingBudget(false);
+                          }}
+                        />
+                        <button onClick={saveBudget} className="text-[10px] bg-white text-[#141414] px-2 py-1 rounded font-bold hover:bg-gray-200 transition-colors">保存</button>
+                      </div>
+                    ) : (
+                      <button onClick={() => { setIsEditingBudget(true); setTempBudget(monthlyBudget > 0 ? monthlyBudget.toString() : ''); }} className="text-[10px] font-bold text-gray-400 hover:text-white transition-colors bg-white/5 hover:bg-white/10 px-2 py-1 rounded flex items-center gap-1 z-20 relative">
+                        <Edit2 size={10} /> 予算: {monthlyBudget > 0 ? formatCurrency(monthlyBudget) : '未設定'}
+                      </button>
+                    )}
+                  </div>
+                  <div className="font-mono text-2xl sm:text-3xl font-light tracking-tight break-all mb-3">
+                    {formatCurrency(monthlyStats.expense)}
+                  </div>
                 </div>
+                
+                {/* Progress Bar */}
+                {monthlyBudget > 0 && (
+                  <div className="w-full mt-auto">
+                    <div className="flex justify-between text-[10px] font-mono mb-1.5">
+                      <span className="opacity-70">予算消化率</span>
+                      <span className={budgetPercent >= 100 ? "text-red-400 font-bold" : budgetPercent >= 80 ? "text-yellow-400 font-bold" : "text-green-400"}>
+                        {budgetPercent.toFixed(1)}%
+                      </span>
+                    </div>
+                    <div className="h-1.5 w-full bg-gray-800 rounded-full overflow-hidden">
+                      <div 
+                        className={`h-full rounded-full transition-all duration-500 ${
+                          budgetPercent >= 100 ? "bg-red-500" : budgetPercent >= 80 ? "bg-yellow-400" : "bg-green-500"
+                        }`}
+                        style={{ width: `${Math.min(budgetPercent, 100)}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -671,14 +845,22 @@ export default function App() {
                 <Plus size={14} className="mr-1" /> Entry Form
               </h2>
               <div className="flex items-center gap-2">
+                <button 
+                  type="button" 
+                  onClick={toggleSpeechInput}
+                  className={`transition-colors flex items-center gap-1 px-2 py-1 rounded-md ${isListening ? 'bg-red-100 text-red-600 animate-pulse' : 'text-gray-400 hover:text-[#141414] bg-gray-50 hover:bg-gray-100'}`}
+                >
+                  {isListening ? <MicOff size={12} /> : <Mic size={12} />} 
+                  <span className="text-[10px] font-bold">{isListening ? '聞き取り中...' : '音声入力'}</span>
+                </button>
                 <label className="cursor-pointer text-gray-400 hover:text-[#141414] transition-colors flex items-center gap-1 bg-gray-50 hover:bg-gray-100 px-2 py-1 rounded-md">
-                  <Camera size={12} /> <span className="text-[10px] font-bold">レシート読込</span>
+                  <Camera size={12} /> <span className="text-[10px] font-bold">レシート</span>
                   <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleReceiptUpload} />
                 </label>
                 <button 
                   type="button" 
                   onClick={() => setIsCsvModalOpen(true)}
-                  className="text-gray-400 hover:text-[#141414] transition-colors flex items-center gap-1 bg-gray-50 hover:bg-gray-100 px-2 py-1 rounded-md"
+                  className="text-gray-400 hover:text-[#141414] transition-colors flex items-center gap-1 bg-gray-50 hover:bg-gray-100 px-2 py-1 rounded-md hidden sm:flex"
                 >
                   <Upload size={12} /> <span className="text-[10px] font-bold">CSV読込</span>
                 </button>
@@ -751,7 +933,10 @@ export default function App() {
                   <input
                     type="text"
                     value={memo}
-                    onChange={e => setMemo(e.target.value)}
+                    onChange={e => {
+                      setMemo(e.target.value);
+                      autoSelectCategory(e.target.value);
+                    }}
                     className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#141414] focus:border-transparent text-sm transition-all min-h-[44px]"
                     placeholder="詳細を入力..."
                   />
@@ -972,43 +1157,55 @@ export default function App() {
             
             <div className="p-4 sm:p-6 overflow-y-auto flex-1">
               {/* Add new category */}
-              <div className="flex gap-2 mb-6">
-                <select
-                  value={newCategoryType}
-                  onChange={e => setNewCategoryType(e.target.value as CategoryType)}
-                  className="px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#141414] transition-all"
-                >
-                  <option value="expense">支出</option>
-                  <option value="income">収入</option>
-                </select>
-                <div className="relative flex items-center bg-gray-50 border border-gray-200 rounded-xl px-2">
-                  <div className="text-gray-500 pointer-events-none">
-                    {React.createElement(ICON_MAP[newCategoryIcon] || ICON_MAP['HelpCircle'], { size: 16 })}
-                  </div>
+              <div className="flex flex-col gap-2 mb-6">
+                <div className="flex gap-2">
                   <select
-                    value={newCategoryIcon}
-                    onChange={e => setNewCategoryIcon(e.target.value)}
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                    value={newCategoryType}
+                    onChange={e => setNewCategoryType(e.target.value as CategoryType)}
+                    className="px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#141414] transition-all"
+                  >
+                    <option value="expense">支出</option>
+                    <option value="income">収入</option>
+                  </select>
+                  <button 
+                    onClick={() => setShowNewIconPicker(!showNewIconPicker)}
+                    className="flex items-center justify-center bg-gray-50 border border-gray-200 rounded-xl px-3 hover:bg-gray-100 transition-colors"
                     title="アイコンを選択"
                   >
-                    {Object.keys(ICON_MAP).map(icon => <option key={icon} value={icon}>{icon}</option>)}
-                  </select>
+                    <div className="text-gray-500 pointer-events-none">
+                      {React.createElement(ICON_MAP[newCategoryIcon] || ICON_MAP['HelpCircle'], { size: 16 })}
+                    </div>
+                  </button>
+                  <input 
+                    type="text" 
+                    value={newCategoryName} 
+                    onChange={e => setNewCategoryName(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && addCategory()}
+                    placeholder="新しい科目名..."
+                    className="flex-1 px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#141414] transition-all"
+                  />
+                  <button 
+                    onClick={addCategory} 
+                    disabled={!newCategoryName.trim()}
+                    className="px-4 py-2.5 bg-[#141414] text-white rounded-xl text-sm font-bold hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
+                  >
+                    追加
+                  </button>
                 </div>
-                <input 
-                  type="text" 
-                  value={newCategoryName} 
-                  onChange={e => setNewCategoryName(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && addCategory()}
-                  placeholder="新しい科目名..."
-                  className="flex-1 px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#141414] transition-all"
-                />
-                <button 
-                  onClick={addCategory} 
-                  disabled={!newCategoryName.trim()}
-                  className="px-4 py-2.5 bg-[#141414] text-white rounded-xl text-sm font-bold hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
-                >
-                  追加
-                </button>
+                
+                {showNewIconPicker && (
+                  <div className="flex flex-wrap gap-1.5 p-3 bg-gray-50 border border-gray-200 rounded-xl max-h-40 overflow-y-auto">
+                    {Object.keys(ICON_MAP).map(icon => (
+                      <button 
+                        key={icon} 
+                        onClick={() => { setNewCategoryIcon(icon); setShowNewIconPicker(false); }} 
+                        className={`p-2 rounded-lg transition-colors ${newCategoryIcon === icon ? 'bg-[#141414] text-white' : 'hover:bg-gray-200 text-gray-500'}`}
+                      >
+                         {React.createElement(ICON_MAP[icon], { size: 18 })}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Category List */}
@@ -1028,37 +1225,49 @@ export default function App() {
                       className={`flex items-center justify-between p-3 bg-white border shadow-sm rounded-xl group transition-all ${draggedCategoryIndex === index ? 'opacity-50 border-dashed border-gray-400' : 'border-gray-100 hover:border-gray-200'}`}
                     >
                       {editingCategory?.old === cat.name ? (
-                        <div className="flex items-center gap-2 flex-1">
-                          <select
-                            value={editingCategory.type}
-                            onChange={e => setEditingCategory({...editingCategory, type: e.target.value as CategoryType})}
-                            className="px-2 py-1.5 bg-gray-50 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#141414]"
-                          >
-                            <option value="expense">支出</option>
-                            <option value="income">収入</option>
-                          </select>
-                          <div className="relative flex items-center bg-gray-50 border border-gray-300 rounded-lg px-2 py-1.5">
-                            <div className="text-gray-500 pointer-events-none">
-                              {React.createElement(ICON_MAP[editingCategory.icon] || ICON_MAP['HelpCircle'], { size: 14 })}
-                            </div>
+                        <div className="flex flex-col gap-2 flex-1">
+                          <div className="flex items-center gap-2">
                             <select
-                              value={editingCategory.icon}
-                              onChange={e => setEditingCategory({...editingCategory, icon: e.target.value})}
-                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                              value={editingCategory.type}
+                              onChange={e => setEditingCategory({...editingCategory, type: e.target.value as CategoryType})}
+                              className="px-2 py-1.5 bg-gray-50 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#141414]"
                             >
-                              {Object.keys(ICON_MAP).map(icon => <option key={icon} value={icon}>{icon}</option>)}
+                              <option value="expense">支出</option>
+                              <option value="income">収入</option>
                             </select>
+                            <button
+                              onClick={() => setShowEditIconPicker(!showEditIconPicker)}
+                              className="flex items-center justify-center bg-gray-50 border border-gray-300 rounded-lg px-2.5 py-1.5 hover:bg-gray-100 transition-colors"
+                            >
+                              <div className="text-gray-500 pointer-events-none">
+                                {React.createElement(ICON_MAP[editingCategory.icon] || ICON_MAP['HelpCircle'], { size: 14 })}
+                              </div>
+                            </button>
+                            <input 
+                              type="text"
+                              value={editingCategory.new}
+                              onChange={e => setEditingCategory({...editingCategory, new: e.target.value})}
+                              onKeyDown={e => e.key === 'Enter' && saveEditCategory()}
+                              className="flex-1 px-3 py-1.5 bg-gray-50 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#141414]"
+                              autoFocus
+                            />
+                            <button onClick={saveEditCategory} className="p-2 text-white bg-[#141414] hover:bg-black rounded-lg transition-colors"><Check size={14}/></button>
+                            <button onClick={() => { setEditingCategory(null); setShowEditIconPicker(false); }} className="p-2 text-gray-500 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"><X size={14}/></button>
                           </div>
-                          <input 
-                            type="text"
-                            value={editingCategory.new}
-                            onChange={e => setEditingCategory({...editingCategory, new: e.target.value})}
-                            onKeyDown={e => e.key === 'Enter' && saveEditCategory()}
-                            className="flex-1 px-3 py-1.5 bg-gray-50 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#141414]"
-                            autoFocus
-                          />
-                          <button onClick={saveEditCategory} className="p-2 text-white bg-[#141414] hover:bg-black rounded-lg transition-colors"><Check size={14}/></button>
-                          <button onClick={() => setEditingCategory(null)} className="p-2 text-gray-500 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"><X size={14}/></button>
+                          
+                          {showEditIconPicker && (
+                            <div className="flex flex-wrap gap-1.5 p-2 bg-gray-50 border border-gray-200 rounded-xl max-h-32 overflow-y-auto">
+                              {Object.keys(ICON_MAP).map(icon => (
+                                <button 
+                                  key={icon} 
+                                  onClick={() => { setEditingCategory({...editingCategory, icon}); setShowEditIconPicker(false); }} 
+                                  className={`p-1.5 rounded-lg transition-colors ${editingCategory.icon === icon ? 'bg-[#141414] text-white' : 'hover:bg-gray-200 text-gray-500'}`}
+                                >
+                                   {React.createElement(ICON_MAP[icon], { size: 16 })}
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       ) : (
                         <>
